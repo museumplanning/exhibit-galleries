@@ -156,10 +156,13 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.physicallyCorrectLights = true;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.1;
+renderer.outputEncoding = THREE.sRGBEncoding;
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0xf2f2f0);
-scene.fog = new THREE.Fog(0xf2f2f0, 70, 180);
+scene.background = new THREE.Color(0x0a0a0f);
+scene.fog = new THREE.Fog(0x0a0a0f, 80, 200);
 
 const camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.1, 250);
 
@@ -243,7 +246,7 @@ const ceilTex  = makeCeilTex();
 // Floor — blue carpet
 const floor = new THREE.Mesh(
   new THREE.PlaneGeometry(HALL_W, HALL_L),
-  new THREE.MeshPhongMaterial({ map: floorTex, shininess: 2, specular: 0x000000 })
+  new THREE.MeshStandardMaterial({ map: floorTex, roughness: 0.92, metalness: 0.0 })
 );
 floor.rotation.x = -Math.PI / 2;
 floor.position.set(HALL_CX, 0, HALL_CZ);
@@ -253,14 +256,14 @@ scene.add(floor);
 // Ceiling — plain white
 const ceil = new THREE.Mesh(
   new THREE.PlaneGeometry(HALL_W, HALL_L),
-  new THREE.MeshPhongMaterial({ map: ceilTex, color: 0xffffff, shininess: 5 })
+  new THREE.MeshPhongMaterial({ color: 0x000000, shininess: 0 })
 );
 ceil.rotation.x = Math.PI / 2;
 ceil.position.set(HALL_CX, HALL_H, HALL_CZ);
 scene.add(ceil);
 
 // White walls — all 4 sides
-const wallMat = new THREE.MeshPhongMaterial({ map: wallTex, color: 0xfafaf8, shininess: 12 });
+const wallMat = new THREE.MeshStandardMaterial({ map: wallTex, color: 0xfafaf8, roughness: 0.85, metalness: 0.0 });
 function addWall(w, h, x, y, z, ry) {
   const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), wallMat.clone());
   m.position.set(x, y, z); m.rotation.y = ry; m.receiveShadow = true;
@@ -272,30 +275,150 @@ addWall(HALL_L, HALL_H, -HALL_W/2, HALL_H/2, HALL_CZ,  Math.PI/2);
 addWall(HALL_L, HALL_H,  HALL_W/2, HALL_H/2, HALL_CZ, -Math.PI/2);
 // Back wall (far end)
 addWall(HALL_W, HALL_H,  0, HALL_H/2, HALL_Z1, Math.PI);
-// Front wall (entrance)
-addWall(HALL_W, HALL_H,  0, HALL_H/2, HALL_Z0, 0);
+// Front wall — GLASS CURTAIN WALL with double doors
+
+(function() {
+  const GZ = HALL_Z0;           // z position of entrance wall
+  const DOOR_W  = 5.0;          // each door leaf width
+  const DOOR_H  = 9.0;          // door height
+  const FRAME_T = 0.18;         // frame thickness
+  const MULLION = 0.12;         // mullion width
+
+  // Materials
+  const frameSteelMat = new THREE.MeshStandardMaterial({ color:0x888888, roughness:0.2, metalness:0.9 });
+  const glassMat = new THREE.MeshPhongMaterial({
+    color: 0x88bbdd, transparent: true, opacity: 0.18,
+    shininess: 200, specular: 0xffffff, side: THREE.DoubleSide
+  });
+  const doorGlassMat = new THREE.MeshPhongMaterial({
+    color: 0x99ccee, transparent: true, opacity: 0.22,
+    shininess: 220, specular: 0xffffff, side: THREE.DoubleSide
+  });
+  const doorHandleMat = new THREE.MeshPhongMaterial({ color:0xcccccc, shininess:180, specular:0xffffff });
+
+  // ── STRUCTURAL FRAME ────────────────────────────────────────
+  // Top horizontal beam (full width)
+  const topBeam = new THREE.Mesh(new THREE.BoxGeometry(HALL_W, FRAME_T, FRAME_T), frameSteelMat);
+  topBeam.position.set(0, HALL_H - FRAME_T/2, GZ); scene.add(topBeam);
+  // Floor sill (full width)
+  const sill = new THREE.Mesh(new THREE.BoxGeometry(HALL_W, 0.14, FRAME_T), frameSteelMat);
+  sill.position.set(0, 0.07, GZ); scene.add(sill);
+  // Vertical mullions — spaced every 8 units across the width
+  const mullionPositions = [];
+  for (let mx = -HALL_W/2; mx <= HALL_W/2; mx += 8) mullionPositions.push(mx);
+  mullionPositions.forEach(mx => {
+    if (Math.abs(mx) < DOOR_W) return; // skip mullions inside the door opening only
+    const mul = new THREE.Mesh(new THREE.BoxGeometry(MULLION, HALL_H, FRAME_T), frameSteelMat);
+    mul.position.set(mx, HALL_H/2, GZ); scene.add(mul);
+  });
+  // Mid-height horizontal rail
+  const midRail = new THREE.Mesh(new THREE.BoxGeometry(HALL_W, MULLION, FRAME_T), frameSteelMat);
+  midRail.position.set(0, DOOR_H, GZ); scene.add(midRail);
+
+  // ── GLASS PANELS (above doors and flanking) ─────────────────
+  // Fill each bay with glass, skipping the door opening (-DOOR_W to +DOOR_W)
+  const bays = [];
+  for (let i = 0; i < mullionPositions.length - 1; i++) {
+    const x0 = mullionPositions[i], x1 = mullionPositions[i+1];
+    const cx = (x0 + x1) / 2, bw = x1 - x0 - MULLION;
+    bays.push({ cx, bw, x0, x1 });
+  }
+
+  bays.forEach(({ cx, bw, x0, x1 }) => {
+    const inDoorZone = x1 > -DOOR_W - 0.1 && x0 < DOOR_W + 0.1;
+
+    if (inDoorZone) {
+      // Transom glass above the door
+      const transomH = HALL_H - DOOR_H - MULLION;
+      const transomPanel = new THREE.Mesh(
+        new THREE.PlaneGeometry(bw, transomH), glassMat.clone()
+      );
+      transomPanel.position.set(cx, DOOR_H + MULLION/2 + transomH/2, GZ);
+      scene.add(transomPanel);
+    } else {
+      // Full-height glass panel in this bay (two pieces: below and above mid-rail)
+      const lowerH = DOOR_H - MULLION;
+      const lowerPanel = new THREE.Mesh(new THREE.PlaneGeometry(bw, lowerH), glassMat.clone());
+      lowerPanel.position.set(cx, lowerH/2, GZ); scene.add(lowerPanel);
+
+      const upperH = HALL_H - DOOR_H - MULLION;
+      if (upperH > 0.1) {
+        const upperPanel = new THREE.Mesh(new THREE.PlaneGeometry(bw, upperH), glassMat.clone());
+        upperPanel.position.set(cx, DOOR_H + MULLION/2 + upperH/2, GZ); scene.add(upperPanel);
+      }
+    }
+  });
+
+  // ── DOUBLE DOORS ────────────────────────────────────────────
+  // Left door leaf (hinged at x = -DOOR_W, swings slightly open inward)
+  const doorAngle = 0.18; // radians open
+  [-1, 1].forEach(side => {
+    const hinge_x = side * DOOR_W;
+    const pivot = new THREE.Object3D();
+    pivot.position.set(hinge_x, 0, GZ);
+    scene.add(pivot);
+
+    // Door glass
+    const dg = new THREE.Mesh(new THREE.PlaneGeometry(DOOR_W - MULLION, DOOR_H - 0.2), doorGlassMat.clone());
+    dg.position.set(-side * (DOOR_W/2 - MULLION/2), DOOR_H/2, 0);
+    pivot.add(dg);
+
+    // Door frame (4 sides)
+    const dfMat = new THREE.MeshPhongMaterial({ color:0x777777, shininess:100, specular:0xaaaaaa });
+    // Top & bottom rails
+    [[DOOR_H - 0.1], [0.1]].forEach(([ry]) => {
+      const r = new THREE.Mesh(new THREE.BoxGeometry(DOOR_W, 0.12, FRAME_T+0.04), dfMat);
+      r.position.set(-side * (DOOR_W/2 - MULLION/2), ry, 0);
+      pivot.add(r);
+    });
+    // Stile (outer edge)
+    const stile = new THREE.Mesh(new THREE.BoxGeometry(0.12, DOOR_H, FRAME_T+0.04), dfMat);
+    stile.position.set(-side * (DOOR_W - 0.06), DOOR_H/2, 0);
+    pivot.add(stile);
+
+    // Handle — horizontal bar
+    const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.9, 10), doorHandleMat);
+    handle.rotation.z = Math.PI / 2;
+    handle.position.set(-side * (DOOR_W - 0.35), DOOR_H * 0.52, FRAME_T + 0.12);
+    pivot.add(handle);
+    // Handle backing plate
+    const plate = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.4, 0.08), doorHandleMat);
+    plate.position.set(-side * (DOOR_W - 0.35), DOOR_H * 0.52, FRAME_T + 0.06);
+    pivot.add(plate);
+
+    // Rotate door slightly open (left door opens left, right opens right)
+    pivot.rotation.y = side * doorAngle;
+  });
+
+  // ── EXTERIOR STEP ────────────────────────────────────────────
+  const stepMat = new THREE.MeshPhongMaterial({ color:0xccccbb, shininess:15 });
+  const step = new THREE.Mesh(new THREE.BoxGeometry(DOOR_W * 2 + 2, 0.2, 1.4), stepMat);
+  step.position.set(0, 0.1, GZ - 0.8); scene.add(step);
+  const step2 = new THREE.Mesh(new THREE.BoxGeometry(DOOR_W * 2 + 4, 0.1, 2.4), stepMat);
+  step2.position.set(0, 0.05, GZ - 1.9); scene.add(step2);
+})();
 
 // White baseboard — all 4 walls
-const trimMat = new THREE.MeshPhongMaterial({ color: 0xeeeeec, shininess: 20 });
+const trimMat = new THREE.MeshStandardMaterial({ color: 0xeeeeec, roughness:0.65, metalness:0.05 });
 // Side baseboards
 [-HALL_W/2+0.1, HALL_W/2-0.1].forEach(x => {
   const trim = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.5, HALL_L), trimMat);
   trim.position.set(x, 0.25, HALL_CZ);
   scene.add(trim);
 });
-// Front/back baseboards
-[HALL_Z0+0.1, HALL_Z1-0.1].forEach(z => {
-  const trim = new THREE.Mesh(new THREE.BoxGeometry(HALL_W, 0.5, 0.16), trimMat);
-  trim.position.set(0, 0.25, z);
-  scene.add(trim);
-});
+// Back wall baseboard only (entrance is glass — no baseboard)
+const backTrim = new THREE.Mesh(new THREE.BoxGeometry(HALL_W, 0.5, 0.16), trimMat);
+backTrim.position.set(0, 0.25, HALL_Z1-0.1);
+scene.add(backTrim);
 
 
-scene.add(new THREE.AmbientLight(0xffffff, 1.8));
+scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+// Hemisphere — warm ceiling, cool floor bounce
+scene.add(new THREE.HemisphereLight(0xfff5e0, 0x1a2e52, 0.7));
 
-// Recessed housing material — dark ring flush with ceiling
-const canHousingMat = new THREE.MeshPhongMaterial({ color:0x222222, shininess:10 });
-const canInnerMat   = new THREE.MeshStandardMaterial({ color:0x000000, emissive:0xffffff, emissiveIntensity:3.5 });
+// Recessed housing material — brushed steel
+const canHousingMat = new THREE.MeshStandardMaterial({ color:0xaaaaaa, roughness:0.3, metalness:0.8 });
+const canInnerMat   = new THREE.MeshStandardMaterial({ color:0xffffff, emissive:0xfff8e8, emissiveIntensity:6.0, roughness:1, metalness:0 });
 
 // 5×5 grid of recessed cans across the square room
 for (let fx = -HALL_W/2+9; fx <= HALL_W/2-9; fx += 16) {
@@ -309,8 +432,8 @@ for (let fx = -HALL_W/2+9; fx <= HALL_W/2-9; fx += 16) {
     inner.rotation.x = Math.PI / 2;
     inner.position.set(fx, HALL_H - 0.08, fz);
     scene.add(inner);
-    // Spotlight downward
-    const pl = new THREE.SpotLight(0xfffbe8, 2.2, HALL_H + 1, Math.PI * 0.18, 0.55);
+    // Spotlight downward — tighter cone, higher intensity for drama
+    const pl = new THREE.SpotLight(0xfffbe8, 4.5, HALL_H + 2, Math.PI * 0.14, 0.4);
     pl.position.set(fx, HALL_H - 0.1, fz);
     pl.target.position.set(fx, 0, fz);
     pl.castShadow = false;
@@ -338,8 +461,8 @@ const EXHIBITS = [
 
 // ── DIGITAL SCREEN BUILDER ─────────────────────────────────────
 const screenUpdaters = [];
-const frameMat = new THREE.MeshPhongMaterial({ color:0x111111, shininess:80, specular:0x444444 });
-const bezelMat = new THREE.MeshPhongMaterial({ color:0x1a1a1a, shininess:55 });
+const frameMat = new THREE.MeshStandardMaterial({ color:0x111111, roughness:0.2, metalness:0.9 });
+const bezelMat = new THREE.MeshStandardMaterial({ color:0x1a1a1a, roughness:0.35, metalness:0.7 });
 
 function getWallTransform(d) {
   if (d.wall==='left')  return { wx:-HALL_W/2, wz:d.pos,    ry: Math.PI/2, gx: 1, gz: 0 };
@@ -686,10 +809,10 @@ const DIV_DOOR_W = 8;
 const DIV_SEG_W  = (HALL_W - DIV_DOOR_W) / 2;  // 30 units each side
 const DIV_Z      = HALL_CZ;
 
-const divWallMat  = new THREE.MeshPhongMaterial({ map: wallTex, color: 0xfafaf8, shininess: 12 });
-const divFrameMat = new THREE.MeshPhongMaterial({ color: 0xd4c4a0, shininess: 40 });
-const divCapMat   = new THREE.MeshPhongMaterial({ color: 0xd4c4a0, shininess: 35 });
-const divTrimMat2 = new THREE.MeshPhongMaterial({ color: 0xeeeeec, shininess: 20 });
+const divWallMat  = new THREE.MeshStandardMaterial({ map: wallTex, color: 0xfafaf8, roughness:0.85, metalness:0 });
+const divFrameMat = new THREE.MeshStandardMaterial({ color: 0xd4c4a0, roughness:0.4, metalness:0.1 });
+const divCapMat   = new THREE.MeshStandardMaterial({ color: 0xd4c4a0, roughness:0.35, metalness:0.1 });
+const divTrimMat2 = new THREE.MeshStandardMaterial({ color: 0xeeeeec, roughness:0.7, metalness:0 });
 
 // Left segment
 const divSegL = new THREE.Mesh(new THREE.BoxGeometry(DIV_SEG_W, DIV_WALL_H, DIV_WALL_T), divWallMat.clone());
@@ -733,9 +856,9 @@ const TABLE_CONFIGS = [
   { x:   0, z: HALL_CZ-10, title: 'Continental Drift',  bg: '#001210' },
   { x:  14, z: HALL_CZ,    title: 'Tree of Life',        bg: '#0f0008' },
 ];
-const tableMat  = new THREE.MeshPhongMaterial({ color:0x1c1c1c, shininess:90, specular:0x555555 });
-const tableLegM = new THREE.MeshPhongMaterial({ color:0x2a2a2a, shininess:55 });
-const tableEdge = new THREE.MeshPhongMaterial({ color:0x111111, shininess:80 });
+const tableMat  = new THREE.MeshStandardMaterial({ color:0x1c1c1c, roughness:0.15, metalness:0.85 });
+const tableLegM = new THREE.MeshStandardMaterial({ color:0x2a2a2a, roughness:0.25, metalness:0.75 });
+const tableEdge = new THREE.MeshStandardMaterial({ color:0x111111, roughness:0.1,  metalness:0.95 });
 
 TABLE_CONFIGS.forEach((cfg, ti) => {
   // Heavy pedestal base — wide flat plate on the floor
@@ -895,9 +1018,9 @@ const EXHIBIT_TABLES = [
   { x:  18, z: HALL_CZ + 14, title: 'Ocean Origins',       bg: '#00080f', accent: 0x2288cc },
 ];
 
-const exTabMat  = new THREE.MeshPhongMaterial({ color:0x222018, shininess:70, specular:0x443322 });
-const exTabLegM = new THREE.MeshPhongMaterial({ color:0x1a1810, shininess:45 });
-const exTabEdge = new THREE.MeshPhongMaterial({ color:0x111008, shininess:85 });
+const exTabMat  = new THREE.MeshStandardMaterial({ color:0x222018, roughness:0.18, metalness:0.8 });
+const exTabLegM = new THREE.MeshStandardMaterial({ color:0x1a1810, roughness:0.28, metalness:0.7 });
+const exTabEdge = new THREE.MeshStandardMaterial({ color:0x111008, roughness:0.1,  metalness:0.92 });
 const exTabUpdaters = [];
 
 EXHIBIT_TABLES.forEach((cfg, ti) => {
